@@ -13,4 +13,5 @@ var (
 	ErrInvalidTargetURL  = errors.New("invalid target url")
 	ErrForbiddenTarget   = errors.New("target url is not allowed")
 	ErrReplayFailed      = errors.New("replay failed")
+	ErrBinExpired        = errors.New("bin expired")
 )
