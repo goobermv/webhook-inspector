@@ -18,3 +18,7 @@ type RequestRepo interface {
 	ListByBin(ctx context.Context, binID string, limit, offset int) ([]*domain.CapturedRequest, error)
 	GetByID(ctx context.Context, ID string) (*domain.CapturedRequest, error)
 }
+
+type ReplayRepo interface {
+	Insert(ctx context.Context, rp *domain.Replay) (*domain.Replay, error)
+}
