@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -13,26 +14,47 @@ type bucket struct {
 	reset time.Time
 }
 
-func RateLimit(perMinute int) func(http.Handler) http.Handler {
-	var mu sync.Mutex
-	buckets := map[string]*bucket{}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			mu.Lock()
-			b, ok := buckets[ip]
-			if !ok || time.Now().After(b.reset) {
-				b = &bucket{reset: time.Now().Add(time.Minute)}
-				buckets[ip] = b
-			}
-			b.count++
-			exceeded := b.count > perMinute
-			mu.Unlock()
-			if exceeded {
-				httputil.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+type RateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	perMin  int
+}
+
+func NewRateLimiter(perMinute int) *RateLimiter {
+	return &RateLimiter{
+		buckets: make(map[string]*bucket),
+		perMin:  perMinute,
 	}
+}
+
+func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+
+		rl.mu.Lock()
+		b, ok := rl.buckets[ip]
+		now := time.Now()
+		if !ok || now.After(b.reset) {
+			b = &bucket{reset: now.Add(time.Minute)}
+			rl.buckets[ip] = b
+		}
+		b.count++
+		exceeded := b.count > rl.perMin
+		rl.mu.Unlock()
+
+		if exceeded {
+			w.Header().Set("Retry-After", "60")
+			httputil.Error(w, http.StatusTooManyRequests, "too many requests")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
