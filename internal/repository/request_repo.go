@@ -86,3 +86,14 @@ func (r *RequestRepository) GetByID(ctx context.Context, ID string) (*domain.Cap
 	}
 	return c, nil
 }
+
+func (r *RequestRepository) Delete(ctx context.Context, id string) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM requests WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrRequestNotFound
+	}
+	return nil
+}
