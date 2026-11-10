@@ -49,9 +49,9 @@ func main() {
 	binSvc := service.NewBinService(binRepo, cfg.DefaultMaxRequests)
 	reqSvc := service.NewRequestService(reqRepo)
 	ingestSvc := service.NewIngestService(binRepo, reqRepo)
-	replaySvc := service.NewReplayService(reqRepo, replayRepo)
+	replaySvc := service.NewReplayService(reqRepo, replayRepo, cfg.AllowPrivateTargets)
 
-	go worker.RunRetention(ctx, pool, time.Duration(cfg.RetentionHours)*time.Hour)
+	go worker.RunRetention(ctx, pool, time.Duration(cfg.RetentionHours)*time.Hour, logger)
 
 	router := handler.NewRouter(handler.Deps{
 		Bins:               binSvc,

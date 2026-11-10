@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,42 +20,43 @@ const (
 )
 
 type ReplayService struct {
-	requests RequestRepo
-	replays  ReplayRepo
+	requests     RequestRepo
+	replays      ReplayRepo
+	allowPrivate bool
 }
 
-func NewReplayService(requests RequestRepo, replays ReplayRepo) *ReplayService {
+func NewReplayService(requests RequestRepo, replays ReplayRepo, allowPrivate bool) *ReplayService {
 	return &ReplayService{
-		requests: requests,
-		replays:  replays,
+		requests:     requests,
+		replays:      replays,
+		allowPrivate: allowPrivate,
 	}
 }
 
 func (s *ReplayService) Replay(ctx context.Context, requestID, targetURL string) (*domain.Replay, error) {
-	if err := validateTarget(targetURL); err != nil {
+	if err := validateTarget(targetURL, s.allowPrivate); err != nil {
 		return nil, err
 	}
 
 	orig, err := s.requests.GetByID(ctx, requestID)
 	if err != nil {
-		return nil, domain.ErrRequestNotFound
+		return nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, orig.Method, targetURL, bytes.NewReader(orig.Body))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidTargetURL, err)
 	}
-
 	for k, v := range orig.Headers {
 		httpReq.Header.Set(k, v)
 	}
-
-	client := &http.Client{Timeout: replayTimeout}
 
 	replay := &domain.Replay{
 		RequestID: orig.ID,
 		TargetURL: targetURL,
 	}
+
+	client := &http.Client{Timeout: replayTimeout}
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -66,13 +68,20 @@ func (s *ReplayService) Replay(ctx context.Context, requestID, targetURL string)
 	replay.StatusCode = &resp.StatusCode
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	replay.ResponseBody = body
+
 	return s.replays.Insert(ctx, replay)
 }
 
-func validateTarget(rawURL string) error {
+func validateTarget(rawURL string, allowPrivate bool) error {
 	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return domain.ErrInvalidTargetURL
+	}
+
+	if allowPrivate {
+		slog.Warn("replay to potentially private target allowed",
+			"url", rawURL, "reason", "ALLOW_PRIVATE_TARGETS=true")
+		return nil
 	}
 
 	host := u.Hostname()
@@ -81,9 +90,19 @@ func validateTarget(rawURL string) error {
 		return domain.ErrInvalidTargetURL
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		if isBlockedIP(ip) {
 			return domain.ErrForbiddenTarget
 		}
 	}
 	return nil
+}
+
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsMulticast() ||
+		ip.Equal(net.IPv4bcast)
 }

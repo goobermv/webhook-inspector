@@ -1,0 +1,6 @@
+run:        ; go run ./cmd/server
+test:       ; go test ./... -count=1 -race
+lint:       ; golangci-lint run
+up:         ; docker compose up -d --build
+down:       ; docker compose down -v
+migrate-up: ; go run ./cmd/migrate up
