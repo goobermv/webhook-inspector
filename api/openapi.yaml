@@ -1,0 +1,533 @@
+openapi: 3.0.3
+info:
+  title: Webhook Inspector API
+  version: 1.0.0
+  description: |
+    Webhook inspector & replay service — аналог requestbin.com / webhook.site.
+
+    **Как пользоваться:**
+    1. Создать `bin` через `POST /api/v1/bins` (нужен API key).
+    2. Подставить полученный URL `/hook/{binID}` в GitHub/Stripe/что угодно.
+    3. Смотреть сохранённые запросы через `GET /api/v1/bins/{id}/requests`.
+    4. Повторно отправлять их на свой сервер через `POST /api/v1/requests/{id}/replay`.
+
+    **Аутентификация:** управляющие эндпоинты (`/api/v1/*`) требуют `Authorization: Bearer <ADMIN_API_KEY>`.
+    Приём вебхуков (`/hook/{binID}`) — публичный, защищён rate-limit'ом по IP.
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: bins
+    description: Управление корзинами (bin)
+  - name: requests
+    description: Просмотр сохранённых вебхуков
+  - name: replay
+    description: Повторная отправка вебхуков
+  - name: ingest
+    description: Публичный приём вебхуков
+  - name: health
+    description: Health check
+
+security:
+  - BearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /api/v1/bins:
+    post:
+      tags: [bins]
+      summary: Создать bin
+      description: |
+        Создаёт новую корзину. Возвращает `secret`, который используется для HMAC-проверки входящих вебхуков.
+        Секрет показывается **только здесь** — потом он скрыт (`json:"-"`).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 200
+                  example: github-push-test
+      responses:
+        '201':
+          description: Bin создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    get:
+      tags: [bins]
+      summary: Список всех bin'ов
+      responses:
+        '200':
+          description: Массив bin'ов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Bin'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/bins/{id}:
+    parameters:
+      - $ref: '#/components/parameters/BinID'
+
+    get:
+      tags: [bins]
+      summary: Получить bin по ID
+      responses:
+        '200':
+          description: Bin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [bins]
+      summary: Удалить bin
+      description: Каскадно удаляет все requests и replays этого bin'а.
+      responses:
+        '204':
+          description: Удалено
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/bins/{id}/requests:
+    parameters:
+      - $ref: '#/components/parameters/BinID'
+      - name: limit
+        in: query
+        description: Количество запросов (1..200)
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      - name: offset
+        in: query
+        description: Пропустить N записей
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+
+    get:
+      tags: [requests]
+      summary: Список сохранённых вебхуков по bin'у
+      description: Отсортировано по `received_at DESC`.
+      responses:
+        '200':
+          description: Массив запросов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CapturedRequest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RequestID'
+
+    get:
+      tags: [requests]
+      summary: Получить запрос по ID
+      responses:
+        '200':
+          description: Запрос
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapturedRequest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [requests]
+      summary: Удалить запрос
+      responses:
+        '204':
+          description: Удалено
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/requests/{id}/replay:
+    parameters:
+      - $ref: '#/components/parameters/RequestID'
+
+    post:
+      tags: [replay]
+      summary: Повторно отправить сохранённый вебхук
+      description: |
+        Отправляет сохранённый запрос на указанный `target_url` и сохраняет результат (status code, body, error)
+        в таблицу `replays`. Если `ALLOW_PRIVATE_TARGETS=false`, replay на `localhost`/private IP отклоняется (SSRF-защита).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url]
+              properties:
+                target_url:
+                  type: string
+                  format: uri
+                  example: http://localhost:9999/webhook
+      responses:
+        '200':
+          description: Replay выполнен (или записан с ошибкой — см. поле `error`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Replay'
+        '400':
+          description: Невалидный URL, запрещённый target, или битый JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                forbidden:
+                  value:
+                    error: invalid_target
+                    message: target url is not allowed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hook/{binID}:
+    parameters:
+      - name: binID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        example: 550e8400-e29b-41d4-a716-446655440000
+
+    post:
+      tags: [ingest]
+      summary: Принять вебхук (POST)
+      security: []
+      description: |
+        Публичный эндпоинт. Принимает любой HTTP-метод (GET/POST/PUT/PATCH/DELETE/OPTIONS/HEAD).
+        Сохраняет method, path, query, headers, body. Если клиент прислал `X-Signature` — проверяет HMAC-SHA256.
+        Ограничен rate-limit'ом (`RATE_LIMIT_PER_MINUTE`) по IP.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Вебхук сохранён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: received
+        '401':
+          description: Невалидная HMAC-подпись
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bin не существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: Bin истёк
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Body превышает лимит (1 MiB)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Bin полон или превышен rate-limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      tags: [ingest]
+      summary: Принять вебхук (PUT)
+      security: []
+      responses:
+        '200': { description: OK }
+        '401': { description: Invalid signature }
+        '404': { description: Bin not found }
+        '410': { description: Bin expired }
+        '413': { description: Body too large }
+        '429': { description: Bin full or rate limited }
+
+    patch:
+      tags: [ingest]
+      summary: Принять вебхук (PATCH)
+      security: []
+      responses:
+        '200': { description: OK }
+        '401': { description: Invalid signature }
+        '404': { description: Bin not found }
+        '410': { description: Bin expired }
+        '413': { description: Body too large }
+        '429': { description: Bin full or rate limited }
+
+    delete:
+      tags: [ingest]
+      summary: Принять вебхук (DELETE)
+      security: []
+      responses:
+        '200': { description: OK }
+        '401': { description: Invalid signature }
+        '404': { description: Bin not found }
+        '410': { description: Bin expired }
+        '413': { description: Body too large }
+        '429': { description: Bin full or rate limited }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Заголовок `Authorization: Bearer <ADMIN_API_KEY>`'
+
+  parameters:
+    BinID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: 550e8400-e29b-41d4-a716-446655440000
+
+    RequestID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+
+  responses:
+    BadRequest:
+      description: Невалидный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Отсутствует или неверный API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: unauthorized
+            message: missing or invalid api key
+    NotFound:
+      description: Не найдено
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: bin_not_found
+            message: bin not found
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: internal_error
+            message: internal server error
+
+  schemas:
+    Bin:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        max_requests:
+          type: integer
+          example: 1000
+        request_count:
+          type: integer
+          example: 17
+          description: Инкрементируется триггером в БД при каждом INSERT в `requests`.
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CapturedRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bin_id:
+          type: string
+          format: uuid
+        method:
+          type: string
+          example: POST
+        path:
+          type: string
+          example: /hook/550e8400-e29b-41d4-a716-446655440000
+        query:
+          type: object
+          additionalProperties: true
+          example:
+            event: push
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            Content-Type: application/json
+            X-Signature: sha256=abc123...
+        body:
+          type: string
+          format: byte
+          description: Тело запроса в base64
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+        received_at:
+          type: string
+          format: date-time
+
+    Replay:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+        target_url:
+          type: string
+          format: uri
+        status_code:
+          type: integer
+          nullable: true
+          description: 'HTTP-статус от target. `null`, если запрос не дошёл (см. error).'
+        response_body:
+          type: string
+          format: byte
+        error:
+          type: string
+          example: dial tcp 127.0.0.1:9999: connect: connection refused
+        created_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Машиночитаемый код
+          example: bin_not_found
+        message:
+          type: string
+          description: Человекочитаемое описание
+          example: bin not found
